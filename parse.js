@@ -1,7 +1,6 @@
-const { connection } = require('./db-connection')
 const fs = require('fs')
 const readline = require('readline')
-const { DBService } = require('./db-service')
+const { DataFactory, Writer } = require('n3');
 
 const categories = [
     { id: 1, name: "Різне" },
@@ -20,26 +19,6 @@ const manufacturers = [
     { id: 4, name: "PHILIPS" }
 ];
 
-// const defineManufacturers = (rows) => {
-//     const manufacturerCounts = new Map();
-
-//     rows.forEach((row) => {
-//         const manufacturer = row[1]; // Second column
-//         if (manufacturer && !/\d/.test(manufacturer)) {
-//             const upperCaseManufacturer = manufacturer.toUpperCase();
-//             manufacturerCounts.set(
-//                 upperCaseManufacturer,
-//                 (manufacturerCounts.get(upperCaseManufacturer) || 0) + 1
-//             );
-//         }
-//     });
-
-//     return Array.from(manufacturerCounts.entries())
-//         .filter(([, count]) => count > 2)
-//         .map(([name]) => name);
-// }
-
-
 function setManufacturerId(object) {
     if (object.partnumber) {
         const lowerName = object.partnumber.toLowerCase();
@@ -49,7 +28,7 @@ function setManufacturerId(object) {
             }
         }
     }
-    return { ...object, manufacturer: null }; // Default to null if no manufacturer is found
+    return { ...object, manufacturer: null };
 }
 
 function setCategoryId(object) {
@@ -90,7 +69,7 @@ function parseCSVLine(line) {
         }
     }
 
-    result.push(current.trim()); // Add the last segment
+    result.push(current.trim());
     return result;
 }
 
@@ -122,37 +101,87 @@ const parseAndSave = async () => {
         };
         object = setManufacturerId(object);
         object = setCategoryId(object);
+        // console.log(object);
         return object;
     });
+    // пишемо файл
+    const { namedNode, literal } = DataFactory;
+    // Ініціалізуємо Writer
+    const writer = new Writer({
+        prefixes: {
+            ex: 'http://example.org/ontology/',
+            rdf: 'http://www.w3.org/1999/02/22-rdf-syntax-ns#',
+            rdfs: 'http://www.w3.org/2000/01/rdf-schema#',
+            owl: 'http://www.w3.org/2002/07/owl#',
+            xsd: 'http://www.w3.org/2001/XMLSchema#',
+        },
+    });
 
-    // console.log('Generated objects:');
-    // objects.forEach((obj, index) => {
-    //     console.log(`Object ${index + 1}:`, obj);
-    // });
+    // Класи
+    const classes = ['Product', 'Category', 'Manufacturer'];
+    classes.forEach((cls) => {
+        writer.addQuad(namedNode(`http://example.org/ontology/${cls}`), namedNode('rdf:type'), namedNode('owl:Class'));
+    });
 
-    // console.log('Analysis of descriptions completed');
-    // Output objects with category = 1
-    // console.log('Objects with category = 1 (Різне):');
-    // objects.filter(obj => obj.category === 1).forEach((obj, index) => {
-    //     console.log(`Object ${index + 1}:`, obj);
-    // });
+    const dataProperties = {
+        name: 'xsd:string',
+        price: 'xsd:decimal',
+        availability: 'xsd:string',
+        url: 'xsd:anyURI',
+    };
+    Object.entries(dataProperties).forEach(([prop, type]) => {
+        writer.addQuad(namedNode(`http://example.org/ontology/${prop}`), namedNode('rdf:type'), namedNode('owl:DatatypeProperty'));
+        writer.addQuad(namedNode(`http://example.org/ontology/${prop}`), namedNode('rdfs:domain'), namedNode('http://example.org/ontology/Product'));
+        writer.addQuad(namedNode(`http://example.org/ontology/${prop}`), namedNode('rdfs:range'), namedNode(type));
+    });
 
-    const dbService = new DBService()
+    // Об'єктні властивості
+    const objectProperties = {
+        belongsToCategory: 'Category',
+        hasManufacturer: 'Manufacturer',
+    };
+    Object.entries(objectProperties).forEach(([prop, range]) => {
+        writer.addQuad(namedNode(`http://example.org/ontology/${prop}`), namedNode('rdf:type'), namedNode('owl:ObjectProperty'));
+        writer.addQuad(namedNode(`http://example.org/ontology/${prop}`), namedNode('rdfs:domain'), namedNode('http://example.org/ontology/Product'));
+        writer.addQuad(namedNode(`http://example.org/ontology/${prop}`), namedNode('rdfs:range'), namedNode(`http://example.org/ontology/${range}`));
+    });
 
-    for await (let category of categories) {
-        const result = await dbService.addCategory(category)
-        console.log(result)
-    }
+    // категорії та виробники
 
-    for await (let manufacturer of manufacturers) {
-        const result = await dbService.addManufacturer(manufacturer)
-        console.log(result)
-    }
+    categories.forEach((category) => {
+        writer.addQuad(namedNode(`http://example.org/ontology/Category_${category.id}`), namedNode('rdf:type'), namedNode('http://example.org/ontology/Category'));
+        writer.addQuad(namedNode(`http://example.org/ontology/Category_${category.id}`), namedNode('http://example.org/ontology/name'), literal(category.name, namedNode('xsd:string')));
+    });
 
-    for await (let object of objects) {
-        const result = await dbService.addProduct(object)
-        console.log(result)
-    }
+    manufacturers.forEach((manufacturer) => {
+        writer.addQuad(namedNode(`http://example.org/ontology/Manufacturer_${manufacturer.id}`), namedNode('rdf:type'), namedNode('http://example.org/ontology/Manufacturer'));
+        writer.addQuad(namedNode(`http://example.org/ontology/Manufacturer_${manufacturer.id}`), namedNode('http://example.org/ontology/name'), literal(manufacturer.name, namedNode('xsd:string')));
+    });
+
+    // продукти
+
+    objects.forEach((product, index) => {
+        const productURI = `http://example.org/ontology/Product_${index + 1}`;
+        writer.addQuad(namedNode(productURI), namedNode('rdf:type'), namedNode('http://example.org/ontology/Product'));
+        writer.addQuad(namedNode(productURI), namedNode('http://example.org/ontology/name'), literal(product.name, namedNode('xsd:string')));
+        writer.addQuad(namedNode(productURI), namedNode('http://example.org/ontology/url'), literal(product.url, namedNode('xsd:anyURI')));
+        writer.addQuad(namedNode(productURI), namedNode('http://example.org/ontology/availability'), literal(product.availability, namedNode('xsd:string')));
+        writer.addQuad(namedNode(productURI), namedNode('http://example.org/ontology/price'), literal(product.price, namedNode('xsd:decimal')));
+
+        // Додавання зв'язків
+        writer.addQuad(namedNode(productURI), namedNode('http://example.org/ontology/hasManufacturer'), namedNode(`http://example.org/ontology/Manufacturer_${product.manufacturer}`));
+        writer.addQuad(namedNode(productURI), namedNode('http://example.org/ontology/belongsToCategory'), namedNode(`http://example.org/ontology/Category_${product.category}`));
+    });
+
+    writer.end((error, result) => {
+        if (error) {
+            console.error('Error generating OWL:', error);
+        } else {
+            const outputFilePath = './ontology.owl';
+            fs.writeFileSync(outputFilePath, result);
+            console.log(`OWL ontology saved to ${outputFilePath}`);
+        }
+    });
 
 }
 
@@ -161,7 +190,6 @@ const parseAndSave = async () => {
 
 
 const run = async () => {
-    await connection.initialize()
     parseAndSave()
 }
 

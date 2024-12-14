@@ -12,6 +12,7 @@
   "dependencies": {
     "csv-parser": "^3.0.0",
     "mysql": "^2.18.1",
+    "n3": "^1.23.1",
     "typeorm": "^0.3.20"
   }
 }
